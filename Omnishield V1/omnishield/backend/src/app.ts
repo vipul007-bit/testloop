@@ -1,5 +1,5 @@
 // ============================================================
-// src/app.ts — Express application setup
+// src/app.ts — Express application setup — OmniShield v2.0
 // ============================================================
 
 import express from 'express'
@@ -9,13 +9,33 @@ import morgan from 'morgan'
 import compression from 'compression'
 
 import surveillanceRouter from './routes/surveillance'
+import authRouter from './routes/auth'
+import abhaRouter from './routes/abha'
+import epidemicRouter from './routes/epidemic'
+import privacyRouter from './routes/privacy'
+import fhirRouter from './routes/fhir'
+import eventsRouter from './routes/events'
+import federatedRouter from './routes/federated'
+import cdssRouter from './routes/cdss'
+import analyticsRouter from './routes/analytics'
+import chatbotRouter from './routes/chatbot'
 import { errorHandler } from './middleware/errorHandler'
 import { generalRateLimiter } from './middleware/rateLimiter'
 
 const app = express()
 
 // ── Security headers ──────────────────────────────────────────
-app.use(helmet())
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:', 'https:'],
+      connectSrc: ["'self'", 'https://api.anthropic.com'],
+    },
+  },
+}))
 
 // ── CORS ──────────────────────────────────────────────────────
 const allowedOrigins = (process.env.CORS_ORIGINS ?? 'http://localhost:5173')
@@ -44,10 +64,20 @@ app.use('/api/', generalRateLimiter)
 
 // ── Routes ────────────────────────────────────────────────────
 app.use('/api/v1/surveillance', surveillanceRouter)
+app.use('/api/v1/auth', authRouter)
+app.use('/api/v1/abha', abhaRouter)
+app.use('/api/v1/epidemic', epidemicRouter)
+app.use('/api/v1/privacy', privacyRouter)
+app.use('/api/v1/fhir', fhirRouter)
+app.use('/api/v1/events', eventsRouter)
+app.use('/api/v1/federated', federatedRouter)
+app.use('/api/v1/cdss', cdssRouter)
+app.use('/api/v1/analytics', analyticsRouter)
+app.use('/api/v1/chatbot', chatbotRouter)
 
 // ── Health check ──────────────────────────────────────────────
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() })
+  res.json({ status: 'ok', version: '2.0.0', timestamp: new Date().toISOString() })
 })
 
 // ── 404 ───────────────────────────────────────────────────────

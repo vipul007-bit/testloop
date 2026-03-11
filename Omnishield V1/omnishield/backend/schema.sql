@@ -216,3 +216,154 @@ CREATE OR REPLACE VIEW active_high_risk_clusters AS
 
 COMMENT ON VIEW active_high_risk_clusters IS
   'Convenience view for HIGH and CRITICAL clusters — used by the Authority Dashboard.';
+
+
+-- ============================================================
+-- OmniShield v2.0 — Additional Tables
+-- ============================================================
+
+-- ── Table: users ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS users (
+  id            UUID        PRIMARY KEY,
+  email         TEXT        UNIQUE NOT NULL,
+  password_hash TEXT        NOT NULL,
+  full_name     TEXT        NOT NULL,
+  role          TEXT        NOT NULL
+                CHECK (role IN ('doctor','nurse','lab_tech','pharmacist','admin','authority')),
+  mfa_secret    TEXT,
+  is_active     BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+
+COMMENT ON TABLE users IS 'Authenticated user accounts with role-based access control.';
+
+
+-- ── Table: audit_logs ────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id            UUID        PRIMARY KEY,
+  user_id       UUID        REFERENCES users(id) ON DELETE SET NULL,
+  action        TEXT        NOT NULL,
+  resource_type TEXT        NOT NULL,
+  resource_id   TEXT,
+  ip_address    TEXT,
+  user_agent    TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id, created_at DESC);
+
+COMMENT ON TABLE audit_logs IS 'Immutable audit trail for all user actions (HIPAA/NDHM compliance).';
+
+
+-- ── Table: abha_cards ────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS abha_cards (
+  id              UUID        PRIMARY KEY,
+  abha_id         VARCHAR(14) UNIQUE NOT NULL,
+  patient_name    TEXT        NOT NULL,
+  dob             DATE,
+  gender          CHAR(1)     CHECK (gender IN ('M','F','O')),
+  linked_qr_hash  TEXT,
+  geo_access_logs JSONB       NOT NULL DEFAULT '[]',
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_abha_id ON abha_cards(abha_id);
+
+COMMENT ON TABLE abha_cards IS 'ABHA (Ayushman Bharat Health Account) card registry.';
+
+
+-- ── Table: care_pathway ──────────────────────────────────────
+CREATE TABLE IF NOT EXISTS care_pathway (
+  id               UUID        PRIMARY KEY,
+  abha_id          VARCHAR(14) NOT NULL REFERENCES abha_cards(abha_id) ON DELETE CASCADE,
+  facility_name    TEXT        NOT NULL,
+  facility_type    TEXT        NOT NULL CHECK (facility_type IN ('gov','private')),
+  visit_type       TEXT        NOT NULL,
+  icd_code         VARCHAR(10),
+  provider_role    TEXT,
+  geo_lat          DOUBLE PRECISION,
+  geo_lon          DOUBLE PRECISION,
+  notes_encrypted  TEXT,
+  visited_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_care_pathway_abha ON care_pathway(abha_id, visited_at DESC);
+
+COMMENT ON TABLE care_pathway IS 'Geolocation-tagged care pathway for cross-facility longitudinal health tracking.';
+
+
+-- ── Table: privacy_budget ────────────────────────────────────
+CREATE TABLE IF NOT EXISTS privacy_budget (
+  id           UUID           PRIMARY KEY,
+  total_budget DECIMAL(10,4)  NOT NULL DEFAULT 10.0,
+  spent        DECIMAL(10,4)  NOT NULL DEFAULT 0.0,
+  query_count  INT            NOT NULL DEFAULT 0,
+  last_query_at TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ    NOT NULL DEFAULT NOW()
+);
+
+COMMENT ON TABLE privacy_budget IS 'Adaptive differential privacy budget tracker (ε-accounting).';
+
+
+-- ── Table: privacy_query_log ─────────────────────────────────
+CREATE TABLE IF NOT EXISTS privacy_query_log (
+  id           UUID           PRIMARY KEY,
+  budget_id    UUID           REFERENCES privacy_budget(id) ON DELETE CASCADE,
+  epsilon_used DECIMAL(6,4)   NOT NULL,
+  query_type   TEXT           NOT NULL,
+  query_params JSONB          NOT NULL DEFAULT '{}',
+  created_at   TIMESTAMPTZ    NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_privacy_log_budget ON privacy_query_log(budget_id, created_at DESC);
+
+COMMENT ON TABLE privacy_query_log IS 'Per-query privacy budget consumption log for compliance reporting.';
+
+
+-- ── Table: healthcare_events ─────────────────────────────────
+CREATE TABLE IF NOT EXISTS healthcare_events (
+  id               UUID        PRIMARY KEY,
+  event_type       TEXT        NOT NULL,
+  payload          JSONB       NOT NULL DEFAULT '{}',
+  source_facility  TEXT,
+  geo_lat          DOUBLE PRECISION,
+  geo_lon          DOUBLE PRECISION,
+  severity         TEXT        NOT NULL DEFAULT 'INFO'
+                   CHECK (severity IN ('INFO','HIGH','CRITICAL')),
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_created ON healthcare_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_events_severity ON healthcare_events(severity);
+
+COMMENT ON TABLE healthcare_events IS 'Real-time healthcare event stream for SSE broadcasting.';
+
+
+-- ── Table: federated_updates ─────────────────────────────────
+CREATE TABLE IF NOT EXISTS federated_updates (
+  id                UUID        PRIMARY KEY,
+  hospital_id       TEXT        NOT NULL,
+  round_number      INT         NOT NULL,
+  encrypted_weights JSONB       NOT NULL DEFAULT '{}',
+  metrics           JSONB       NOT NULL DEFAULT '{}',
+  submitted_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_federated_round ON federated_updates(round_number, hospital_id);
+
+COMMENT ON TABLE federated_updates IS 'Federated learning model weight updates per hospital per round.';
+
+
+-- ── Table: fhir_resources ────────────────────────────────────
+CREATE TABLE IF NOT EXISTS fhir_resources (
+  id            UUID        PRIMARY KEY,
+  resource_type TEXT        NOT NULL,
+  resource_json JSONB       NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_fhir_type ON fhir_resources(resource_type);
+
+COMMENT ON TABLE fhir_resources IS 'HL7 FHIR R4 resource store (Patient, Observation, DiagnosticReport, MedicationRequest).';

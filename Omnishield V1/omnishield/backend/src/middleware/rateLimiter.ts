@@ -22,7 +22,24 @@ export const reportRateLimiter = rateLimit({
       httpStatus: 429,
     },
   },
-  skip: (req) => process.env.NODE_ENV === 'test',
+  skip: (_req) => process.env.NODE_ENV === 'test',
+})
+
+/**
+ * Auth endpoint limiter — 5 attempts per 15 minutes per IP
+ */
+export const authRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: {
+      code: 'RATE_LIMIT_EXCEEDED',
+      message: 'Too many authentication attempts. Please try again in 15 minutes.',
+      httpStatus: 429,
+    },
+  },
 })
 
 /**
