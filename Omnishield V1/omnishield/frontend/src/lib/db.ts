@@ -50,12 +50,31 @@ export class OmniShieldDB extends Dexie {
    */
   pendingReports!: Table<PendingReport>
 
+  // New stores for v2.0
+  authTokens!: Table<{ id?: number; token: string; userId: string; role: string; expiresAt: string; storedAt: string }>
+  carePathway!: Table<{ id?: number; abhaId: string; facilityName: string; facilityType: string; visitType: string; icdCode?: string; geoLat?: number; geoLon?: number; visitedAt: string; synced: boolean }>
+  healthcareEvents!: Table<{ id?: number; eventId: string; eventType: string; payload: any; sourceFacility: string; severity: string; createdAt: string }>
+  fhirResources!: Table<{ id?: number; resourceId: string; resourceType: string; resource: any; cachedAt: string }>
+  cdssResults!: Table<{ id?: number; analyzedAt: string; symptoms: string[]; diagnoses: any[]; interactions: any[]; tests: any[] }>
+  epidemicSimulations!: Table<{ id?: number; model: string; params: any; series: any[]; peakDay: number; simulatedAt: string }>
+
   constructor() {
     super('OmniShieldDB')
 
     this.version(1).stores({
       blindRecords:   'localId, syncStatus, [id+syncStatus]',
       pendingReports: '++id, createdAt, attempts, lastError',
+    })
+
+    this.version(2).stores({
+      blindRecords:          'localId, syncStatus, [id+syncStatus]',
+      pendingReports:        '++id, createdAt, attempts, lastError',
+      authTokens:            '++id, userId, role',
+      carePathway:           '++id, abhaId, visitedAt, synced',
+      healthcareEvents:      '++id, eventId, eventType, severity, createdAt',
+      fhirResources:         '++id, resourceId, resourceType, cachedAt',
+      cdssResults:           '++id, analyzedAt',
+      epidemicSimulations:   '++id, model, simulatedAt',
     })
   }
 }
