@@ -260,5 +260,133 @@ def main():
     print("=" * 60 + "\n")
 
 
+# ─────────────────────────────────────────────────────────────
+# SIR / SEIR EPIDEMIC SIMULATION MODELS
+# Mirrors the /api/v1/epidemic/simulate endpoint logic
+# ─────────────────────────────────────────────────────────────
+
+def run_sir(N, I0, R0, gamma, days):
+    """
+    SIR compartmental model.
+    dS/dt = -β·S·I/N
+    dI/dt =  β·S·I/N - γ·I
+    dR/dt =  γ·I
+    """
+    beta = R0 * gamma
+    S, I, R = [N - I0], [I0], [0.0]
+    for _ in range(days):
+        s, i, r = S[-1], I[-1], R[-1]
+        ds = -beta * s * i / N
+        di =  beta * s * i / N - gamma * i
+        dr =  gamma * i
+        S.append(max(0.0, s + ds))
+        I.append(max(0.0, i + di))
+        R.append(max(0.0, r + dr))
+    return S, I, R
+
+
+def run_seir(N, I0, R0, gamma, sigma, days):
+    """
+    SEIR compartmental model (adds Exposed compartment).
+    dS/dt = -β·S·I/N
+    dE/dt =  β·S·I/N - σ·E
+    dI/dt =  σ·E      - γ·I
+    dR/dt =  γ·I
+    """
+    beta = R0 * gamma
+    S, E, I, R = [N - I0], [0.0], [I0], [0.0]
+    for _ in range(days):
+        s, e, i, r = S[-1], E[-1], I[-1], R[-1]
+        new_exposed = beta * s * i / N
+        ds = -new_exposed
+        de =  new_exposed - sigma * e
+        di =  sigma * e   - gamma * i
+        dr =  gamma * i
+        S.append(max(0.0, s + ds))
+        E.append(max(0.0, e + de))
+        I.append(max(0.0, i + di))
+        R.append(max(0.0, r + dr))
+    return S, E, I, R
+
+
+def demo_epidemic_models():
+    """Run SIR and SEIR simulations for Delhi NCR dengue scenario."""
+    print("\n" + "=" * 60)
+    print("  SIR / SEIR EPIDEMIC SIMULATION — Delhi NCR Dengue")
+    print("=" * 60)
+
+    N        = 2_000_000   # population
+    I0       = 42          # initial infected (from DBSCAN cluster)
+    R0       = 2.4         # dengue basic reproduction number
+    gamma    = 1 / 7       # recovery rate (~7 days)
+    sigma    = 1 / 5       # incubation rate (~5 days, SEIR)
+    days     = 90
+
+    # ── SIR ──────────────────────────────────────────────────
+    S, I, R = run_sir(N, I0, R0, gamma, days)
+    peak_day = I.index(max(I))
+    print(f"\n  Model: SIR  |  R₀={R0}  |  γ={gamma:.4f}  |  Days={days}")
+    print(f"  Population: {N:,}  |  Initial infected: {I0}")
+    print(f"  Peak infected: {int(max(I)):,} on day {peak_day}")
+    print(f"  Final recovered: {int(R[-1]):,} ({R[-1]/N*100:.1f}% of population)")
+
+    # ── SEIR ─────────────────────────────────────────────────
+    S2, E2, I2, R2 = run_seir(N, I0, R0, gamma, sigma, days)
+    peak_day2 = I2.index(max(I2))
+    print(f"\n  Model: SEIR  |  R₀={R0}  |  γ={gamma:.4f}  |  σ={sigma:.4f}  |  Days={days}")
+    print(f"  Population: {N:,}  |  Initial infected: {I0}")
+    print(f"  Peak infected: {int(max(I2)):,} on day {peak_day2}")
+    print(f"  Peak exposed:  {int(max(E2)):,}")
+    print(f"  Final recovered: {int(R2[-1]):,} ({R2[-1]/N*100:.1f}% of population)")
+
+    # ── Tabular snapshot (every 10 days) ─────────────────────
+    print(f"\n  {'Day':>4}  {'S (SIR)':>12}  {'I (SIR)':>12}  {'R (SIR)':>12}  {'I (SEIR)':>12}")
+    print(f"  {'-'*56}")
+    for d in range(0, days + 1, 10):
+        print(f"  {d:>4}  {int(S[d]):>12,}  {int(I[d]):>12,}  {int(R[d]):>12,}  {int(I2[d]):>12,}")
+
+    print()
+
+
+# ─────────────────────────────────────────────────────────────
+# INTER-DISTRICT PROPAGATION GRAPH
+# ─────────────────────────────────────────────────────────────
+
+def demo_hotspot_propagation():
+    """Print inter-district transmission graph (mirrors /epidemic/hotspot-propagation)."""
+    print("=" * 60)
+    print("  INTER-DISTRICT HOTSPOT PROPAGATION GRAPH")
+    print("=" * 60)
+    nodes = [
+        ("Delhi NCR",    28.7041,  77.1025, 42, 2.4, 0.85),
+        ("Mumbai Metro", 19.0760,  72.8777, 38, 2.1, 0.78),
+        ("Kolkata",      22.5726,  88.3639, 28, 1.9, 0.65),
+        ("Bengaluru",    12.9716,  77.5946, 17, 1.6, 0.52),
+        ("Hyderabad",    17.3850,  78.4867, 12, 1.4, 0.43),
+        ("Chennai",      13.0827,  80.2707,  8, 1.3, 0.38),
+    ]
+    edges = [
+        ("Delhi NCR",    "Kolkata",       0.12),
+        ("Delhi NCR",    "Mumbai Metro",  0.10),
+        ("Mumbai Metro", "Bengaluru",     0.08),
+        ("Mumbai Metro", "Hyderabad",     0.07),
+        ("Kolkata",      "Hyderabad",     0.05),
+        ("Bengaluru",    "Chennai",       0.06),
+        ("Hyderabad",    "Chennai",       0.07),
+    ]
+    print(f"\n  {'District':<20} {'Cases':>6}  {'R₀':>5}  {'Risk':>6}")
+    print(f"  {'-'*44}")
+    for name, lat, lon, cases, r0, risk in nodes:
+        icon = "🔴" if risk >= 0.75 else "🟠" if risk >= 0.5 else "🟡"
+        print(f"  {icon} {name:<18} {cases:>6}  {r0:>5}  {risk:>6.2f}")
+    print(f"\n  Transmission Edges:")
+    for src, dst, prob in edges:
+        print(f"    {src:<20} → {dst:<20}  P={prob:.2f}")
+    print()
+
+
+# Append calls to main so they run automatically
 if __name__ == "__main__":
     main()
+    demo_epidemic_models()
+    demo_hotspot_propagation()
