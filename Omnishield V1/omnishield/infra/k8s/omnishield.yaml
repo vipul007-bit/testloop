@@ -1,0 +1,314 @@
+# ═══════════════════════════════════════════════════════════════
+# OmniShield v2.0 — Kubernetes Manifests
+# Deploy: kubectl apply -f infra/k8s/
+# ═══════════════════════════════════════════════════════════════
+
+# ── Namespace ─────────────────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: omnishield
+  labels:
+    app.kubernetes.io/name: omnishield
+    app.kubernetes.io/version: "2.0.0"
+
+---
+# ── ConfigMap: Backend environment ────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: omnishield
+data:
+  NODE_ENV: "production"
+  PORT: "4000"
+  CORS_ORIGINS: "https://omnishield.health"
+  COORDINATE_FUZZ_DEGREES: "0.001"
+
+---
+# ── Secret: Backend credentials ───────────────────────────────
+apiVersion: v1
+kind: Secret
+metadata:
+  name: backend-secrets
+  namespace: omnishield
+type: Opaque
+# ⚠️  SECURITY WARNING: NEVER commit real secrets to version control!
+# These are placeholder values for reference only. Before deploying:
+# 1. Generate JWT_SECRET: openssl rand -hex 64
+# 2. Use a password manager or secrets manager (HashiCorp Vault, AWS Secrets Manager,
+#    GCP Secret Manager, Azure Key Vault, or Sealed Secrets for Kubernetes) to inject
+#    real values at deploy time — do NOT hardcode them in this file.
+# 3. Apply using: kubectl create secret generic backend-secrets --from-env-file=.env.prod
+stringData:
+  JWT_SECRET: "REPLACE-WITH-MINIMUM-64-CHAR-RANDOM-HEX-STRING"
+  DATABASE_URL: "postgresql://omnishield:REPLACE_WITH_STRONG_PASSWORD@omnishield-db:5432/omnishield_db"
+
+---
+# ── Secret: Database credentials ─────────────────────────────
+# ⚠️  SECURITY WARNING: Replace before deploying. See backend-secrets above.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: db-credentials
+  namespace: omnishield
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: "REPLACE_WITH_STRONG_PASSWORD"
+
+---
+# ── Deployment: Backend ───────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: omnishield-backend
+  namespace: omnishield
+  labels:
+    app: omnishield-backend
+    version: "2.0.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: omnishield-backend
+  template:
+    metadata:
+      labels:
+        app: omnishield-backend
+    spec:
+      containers:
+        - name: backend
+          image: omnishield/backend:2.0.0
+          ports:
+            - containerPort: 4000
+          envFrom:
+            - configMapRef:
+                name: backend-config
+            - secretRef:
+                name: backend-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+
+---
+# ── Service: Backend ─────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: omnishield-backend
+  namespace: omnishield
+spec:
+  selector:
+    app: omnishield-backend
+  ports:
+    - port: 4000
+      targetPort: 4000
+  type: ClusterIP
+
+---
+# ── Deployment: Frontend ─────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: omnishield-frontend
+  namespace: omnishield
+  labels:
+    app: omnishield-frontend
+    version: "2.0.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: omnishield-frontend
+  template:
+    metadata:
+      labels:
+        app: omnishield-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: omnishield/frontend:2.0.0
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 10
+
+---
+# ── Service: Frontend ────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: omnishield-frontend
+  namespace: omnishield
+spec:
+  selector:
+    app: omnishield-frontend
+  ports:
+    - port: 80
+      targetPort: 80
+  type: ClusterIP
+
+---
+# ── StatefulSet: PostgreSQL + PostGIS ─────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: omnishield-db
+  namespace: omnishield
+spec:
+  serviceName: omnishield-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: omnishield-db
+  template:
+    metadata:
+      labels:
+        app: omnishield-db
+    spec:
+      containers:
+        - name: postgres
+          image: postgis/postgis:15-3.3
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: omnishield
+            - name: POSTGRES_PASSWORD
+              # Reference from the same backend-secrets Secret to avoid duplication
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              value: omnishield_db
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: db-storage
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+  volumeClaimTemplates:
+    - metadata:
+        name: db-storage
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 20Gi
+
+---
+# ── Service: PostgreSQL ───────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: omnishield-db
+  namespace: omnishield
+spec:
+  selector:
+    app: omnishield-db
+  ports:
+    - port: 5432
+      targetPort: 5432
+  type: ClusterIP
+
+---
+# ── Ingress: External access ──────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: omnishield-ingress
+  namespace: omnishield
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - omnishield.health
+        - api.omnishield.health
+      secretName: omnishield-tls
+  rules:
+    - host: omnishield.health
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: omnishield-frontend
+                port:
+                  number: 80
+    - host: api.omnishield.health
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: omnishield-backend
+                port:
+                  number: 4000
+
+---
+# ── HPA: Backend autoscaling ─────────────────────────────────
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: omnishield-backend-hpa
+  namespace: omnishield
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: omnishield-backend
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80

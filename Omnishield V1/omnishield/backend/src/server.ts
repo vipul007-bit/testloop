@@ -8,7 +8,7 @@ import app from './app'
 import { initWebSocket } from './routes/websocket'
 import { initPgListener } from './db/pgListener'
 
-const PORT = parseInt(process.env.PORT ?? '3001', 10)
+const PORT = parseInt(process.env.PORT ?? '4000', 10)
 
 const server = http.createServer(app)
 
@@ -19,7 +19,7 @@ const wss = initWebSocket(server)
 initPgListener(wss)
 
 server.listen(PORT, () => {
-  console.log(`\n🛡️  OmniShield Backend running`)
+  console.log(`\n🛡️  OmniShield v2.0 Backend running`)
   console.log(`   HTTP  → http://localhost:${PORT}`)
   console.log(`   WS    → ws://localhost:${PORT}/ws/clusters`)
   console.log(`   ENV   → ${process.env.NODE_ENV ?? 'development'}\n`)

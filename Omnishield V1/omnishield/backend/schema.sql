@@ -216,3 +216,201 @@ CREATE OR REPLACE VIEW active_high_risk_clusters AS
 
 COMMENT ON VIEW active_high_risk_clusters IS
   'Convenience view for HIGH and CRITICAL clusters — used by the Authority Dashboard.';
+
+
+-- ═══════════════════════════════════════════════════════════════
+-- OmniShield v2.0 — Extended Schema
+-- New tables for multi-role platform, auth, FHIR, events, FL, CDSS
+-- ═══════════════════════════════════════════════════════════════
+
+-- ── Table: users ──────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS users (
+  id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  email           VARCHAR(255) UNIQUE NOT NULL,
+  password_hash   TEXT        NOT NULL,
+  password_salt   TEXT        NOT NULL,
+  role            VARCHAR(50) NOT NULL
+                  CHECK (role IN ('Doctor','Nurse','LabTechnician','Pharmacist','HospitalAdmin','Authority')),
+  full_name       VARCHAR(255),
+  abha_id         VARCHAR(50),          -- Ayushman Bharat Health Account ID
+  mfa_enabled     BOOLEAN     NOT NULL DEFAULT false,
+  mfa_secret      TEXT,                 -- TOTP secret (encrypted at rest)
+  is_active       BOOLEAN     NOT NULL DEFAULT true,
+  last_login      TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_role  ON users(role);
+
+COMMENT ON TABLE users IS 'Healthcare professional accounts with RBAC roles and MFA support.';
+COMMENT ON COLUMN users.abha_id IS 'Ayushman Bharat Health Account ID for patient-provider linking.';
+
+
+-- ── Table: refresh_tokens ─────────────────────────────────────
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash  TEXT        UNIQUE NOT NULL,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  revoked_at  TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id);
+
+
+-- ── Table: audit_logs ─────────────────────────────────────────
+-- Comprehensive API access audit trail (HIPAA/GDPR/NDHM compliance)
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     UUID,                     -- NULL for unauthenticated requests
+  user_email  VARCHAR(255),
+  user_role   VARCHAR(50),
+  action      VARCHAR(100) NOT NULL,    -- e.g. "POST /api/v1/cdss/analyze"
+  resource    TEXT,                     -- target resource identifier
+  ip_address  INET,
+  user_agent  TEXT,
+  status_code SMALLINT,
+  duration_ms INT,
+  request_id  UUID        DEFAULT gen_random_uuid(),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_user     ON audit_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_action   ON audit_logs(action);
+CREATE INDEX IF NOT EXISTS idx_audit_created  ON audit_logs(created_at DESC);
+
+COMMENT ON TABLE audit_logs IS 'Comprehensive audit trail for HIPAA, GDPR, NDHM compliance.';
+
+
+-- ── Table: privacy_budget_ledger ──────────────────────────────
+-- Cumulative ε tracking per user/session (adaptive privacy budget)
+CREATE TABLE IF NOT EXISTS privacy_budget_ledger (
+  id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id       UUID,
+  session_id    TEXT        NOT NULL,
+  epsilon_used  DECIMAL(6,4) NOT NULL,
+  query_type    VARCHAR(100),
+  budget_limit  DECIMAL(6,4) NOT NULL DEFAULT 5.0,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_privacy_user_session
+  ON privacy_budget_ledger(user_id, session_id);
+
+COMMENT ON TABLE privacy_budget_ledger IS
+  'Tracks cumulative ε usage per session. Budget exhaustion blocks further analysis.';
+
+
+-- ── Table: fhir_resources ─────────────────────────────────────
+-- FHIR R4 resource cache for interoperability
+CREATE TABLE IF NOT EXISTS fhir_resources (
+  id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  resource_type   VARCHAR(50) NOT NULL,   -- Patient, Observation, DiagnosticReport, etc.
+  fhir_id         VARCHAR(100) UNIQUE NOT NULL,
+  patient_id      VARCHAR(100),           -- FHIR patient ID
+  resource_json   JSONB       NOT NULL,
+  source_system   VARCHAR(100),           -- originating system
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_fhir_type      ON fhir_resources(resource_type);
+CREATE INDEX IF NOT EXISTS idx_fhir_patient   ON fhir_resources(patient_id);
+CREATE INDEX IF NOT EXISTS idx_fhir_json      ON fhir_resources USING GIN(resource_json);
+
+COMMENT ON TABLE fhir_resources IS 'HL7 FHIR R4 resource cache for cross-system interoperability.';
+
+
+-- ── Table: event_log ──────────────────────────────────────────
+-- Streaming event history (Kafka-compatible event bus persistence)
+CREATE TABLE IF NOT EXISTS event_log (
+  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  topic       VARCHAR(100) NOT NULL,  -- patient.diagnosis, lab.result, etc.
+  payload     JSONB       NOT NULL,
+  published_by VARCHAR(100),
+  processed   BOOLEAN     NOT NULL DEFAULT false,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_topic    ON event_log(topic);
+CREATE INDEX IF NOT EXISTS idx_event_created  ON event_log(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_event_payload  ON event_log USING GIN(payload);
+
+COMMENT ON TABLE event_log IS 'Event bus persistence for outbreak detection and dashboard push.';
+
+
+-- ── Table: federated_training_rounds ─────────────────────────
+-- FL model training round tracking
+CREATE TABLE IF NOT EXISTS federated_training_rounds (
+  id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  round_number    INT         NOT NULL,
+  model_type      VARCHAR(50) NOT NULL DEFAULT 'outbreak_prediction',
+  participants    JSONB,                -- list of hospital node IDs
+  global_accuracy DECIMAL(6,4),
+  global_loss     DECIMAL(8,6),
+  model_weights   JSONB,               -- aggregated model weights (encrypted)
+  status          VARCHAR(20) NOT NULL DEFAULT 'completed'
+                  CHECK (status IN ('running', 'completed', 'failed')),
+  started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  completed_at    TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_fl_round ON federated_training_rounds(round_number DESC);
+
+COMMENT ON TABLE federated_training_rounds IS 'Federated learning round history and convergence tracking.';
+
+
+-- ── Table: cdss_alerts ────────────────────────────────────────
+-- Clinical Decision Support System alerts
+CREATE TABLE IF NOT EXISTS cdss_alerts (
+  id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  patient_id      VARCHAR(100) NOT NULL,
+  alert_type      VARCHAR(50) NOT NULL,   -- drug_interaction, high_risk, diagnosis_suggestion
+  severity        VARCHAR(20) NOT NULL
+                  CHECK (severity IN ('Low','Medium','High','Critical')),
+  title           TEXT        NOT NULL,
+  description     TEXT,
+  icd10_code      VARCHAR(10),
+  acknowledged    BOOLEAN     NOT NULL DEFAULT false,
+  acknowledged_by UUID,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at      TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_cdss_patient   ON cdss_alerts(patient_id);
+CREATE INDEX IF NOT EXISTS idx_cdss_severity  ON cdss_alerts(severity);
+CREATE INDEX IF NOT EXISTS idx_cdss_active    ON cdss_alerts(patient_id, acknowledged);
+
+COMMENT ON TABLE cdss_alerts IS 'CDSS-generated clinical alerts for drug interactions and high-risk patients.';
+
+
+-- ── Table: population_health_snapshots ───────────────────────
+-- Periodic population health analytics snapshots
+CREATE TABLE IF NOT EXISTS population_health_snapshots (
+  id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  snapshot_type   VARCHAR(50) NOT NULL,   -- disease_trend, capacity_forecast, vaccination_impact
+  region          VARCHAR(100),
+  time_period     VARCHAR(50),
+  data            JSONB       NOT NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_health_type    ON population_health_snapshots(snapshot_type);
+CREATE INDEX IF NOT EXISTS idx_health_region  ON population_health_snapshots(region);
+CREATE INDEX IF NOT EXISTS idx_health_data    ON population_health_snapshots USING GIN(data);
+
+COMMENT ON TABLE population_health_snapshots IS 'Periodic analytics snapshots for population health and capacity planning.';
+
+
+-- ── Note: Demo users ─────────────────────────────────────────
+-- Demo users are created in-memory by the auth routes on first startup
+-- (see backend/src/routes/auth.ts — DEMO_USERS map).
+-- The users table below is for production DB persistence.
+-- To seed production users, run the backend's register API endpoint, or
+-- use a migration script that generates proper scrypt(password, salt) hashes.
+-- The auth service uses: crypto.scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 })
+-- Do NOT manually insert PLACEHOLDER_HASH/SALT values — they will not authenticate.
+

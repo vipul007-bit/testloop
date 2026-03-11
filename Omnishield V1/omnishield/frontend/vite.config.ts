@@ -9,9 +9,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'apple-touch-icon.png'],
       manifest: {
-        name: 'OmniShield — Healthcare Surveillance',
+        name: 'OmniShield v2.0 — Multi-Role Healthcare Platform',
         short_name: 'OmniShield',
-        description: 'Smart Healthcare Disease Surveillance System',
+        description: 'Privacy-preserving multi-role healthcare surveillance and clinical decision support platform',
         theme_color: '#2563eb',
         background_color: '#f0f4f8',
         display: 'standalone',
@@ -49,8 +49,8 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': { target: 'http://localhost:3001', changeOrigin: true },
-      '/ws':  { target: 'ws://localhost:3001',  ws: true },
+      '/api': { target: 'http://localhost:4000', changeOrigin: true },
+      '/ws':  { target: 'ws://localhost:4000',  ws: true },
     },
   },
   build: {
