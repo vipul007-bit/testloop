@@ -30,7 +30,21 @@ const refreshTokens = new Map<string, string>()           // token → userId
 const mfaSecrets = new Map<string, string>()              // userId → totp secret
 
 // ── JWT helpers (native crypto, no external dep) ──────────────
-const JWT_SECRET = process.env.JWT_SECRET ?? 'omnishield-dev-secret-change-in-production'
+// ⚠️  SECURITY: In production, set JWT_SECRET env var to a cryptographically
+//   random string of at least 64 characters. The fallback default MUST NOT
+//   be used in production — it will log a warning below.
+const JWT_SECRET = (() => {
+  const secret = process.env.JWT_SECRET
+  if (!secret) {
+    if (process.env.NODE_ENV === 'production') {
+      console.error('FATAL: JWT_SECRET env var is not set in production. Exiting.')
+      process.exit(1)
+    }
+    console.warn('⚠️  JWT_SECRET not set — using insecure development default. Set JWT_SECRET in production!')
+    return 'omnishield-dev-secret-change-in-production'
+  }
+  return secret
+})()
 
 function b64url(data: string): string {
   return Buffer.from(data)
@@ -208,8 +222,11 @@ router.post('/mfa/verify', (req: Request, res: Response): void => {
 
   const { userId, code } = result.data
 
-  // Demo mode: code "123456" always valid
-  const isValid = code === '123456' || mfaSecrets.has(userId)
+  // ⚠️  DEMO MODE: Any 6-digit code is accepted for hackathon demo purposes.
+  //   In production, replace this with real TOTP validation using speakeasy or otplib:
+  //   import speakeasy from 'speakeasy'
+  //   const isValid = speakeasy.totp.verify({ secret: mfaSecrets.get(userId), token: code, encoding: 'base32' })
+  const isValid = /^\d{6}$/.test(code) && mfaSecrets.has(userId)
 
   if (!isValid) {
     res.status(401).json({ error: 'Invalid MFA code' })

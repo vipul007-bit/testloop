@@ -90,6 +90,9 @@ export default function LoginPage() {
     }
   }
 
+  // ⚠️  DEMO MODE ONLY: Client-side credential fallback when backend is unavailable.
+  //   In production, ALL authentication MUST happen server-side. Never validate
+  //   credentials in the browser — this is only for hackathon demo purposes.
   function performDemoLogin(selectedRole: UserRole, loginEmail?: string, loginPassword?: string) {
     const user = DEMO_USERS[selectedRole]
     const matchEmail = loginEmail ?? user.email

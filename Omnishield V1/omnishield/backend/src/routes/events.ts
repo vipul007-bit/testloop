@@ -4,11 +4,12 @@
 
 import { Router, Request, Response } from 'express'
 import { eventBus, EventPayload, EventTopic, SubscribableTopic } from '../services/eventBus'
+import { authenticateJWT, requireRole, AuthenticatedRequest } from '../middleware/authMiddleware'
 
 const router = Router()
 
-// GET /api/v1/events/stream — SSE endpoint
-router.get('/stream', (req: Request, res: Response): void => {
+// GET /api/v1/events/stream — SSE endpoint (authenticated users only)
+router.get('/stream', authenticateJWT, (req: Request, res: Response): void => {
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
   res.setHeader('Connection', 'keep-alive')
@@ -42,8 +43,8 @@ router.get('/stream', (req: Request, res: Response): void => {
   })
 })
 
-// GET /api/v1/events/history — Recent event history
-router.get('/history', (req: Request, res: Response): void => {
+// GET /api/v1/events/history — Recent event history (authenticated users)
+router.get('/history', authenticateJWT, (req: Request, res: Response): void => {
   const limit = Math.min(parseInt(req.query.limit as string ?? '50', 10), 500)
   const topic = req.query.topic as string | undefined
 
@@ -58,8 +59,8 @@ router.get('/history', (req: Request, res: Response): void => {
   })
 })
 
-// POST /api/v1/events/publish — Publish test event (development only)
-router.post('/publish', (req: Request, res: Response): void => {
+// POST /api/v1/events/publish — Publish event (Authority/HospitalAdmin only)
+router.post('/publish', authenticateJWT, requireRole('Authority', 'HospitalAdmin'), (req: AuthenticatedRequest, res: Response): void => {
   const { topic, data, source } = req.body as { topic?: string; data?: Record<string, unknown>; source?: string }
 
   const validTopics: EventTopic[] = [
@@ -72,7 +73,8 @@ router.post('/publish', (req: Request, res: Response): void => {
     return
   }
 
-  const payload = eventBus.publish(topic as EventTopic, data ?? {}, source)
+  const publisherSource = source ?? req.user?.email ?? 'api'
+  const payload = eventBus.publish(topic as EventTopic, data ?? {}, publisherSource)
   res.json({ published: true, payload })
 })
 

@@ -46,12 +46,12 @@ router.post('/allocate', (req: AuthenticatedRequest, res: Response): void => {
 
 // POST /api/v1/privacy/report
 router.post('/report', (req: AuthenticatedRequest, res: Response): void => {
-  const userId = (req.body as { userId?: string }).userId ?? req.user!.id
-  // Non-admin users can only see their own report
-  if (req.user!.role !== 'HospitalAdmin' && req.user!.role !== 'Authority' && userId !== req.user!.id) {
-    res.status(403).json({ error: 'Access denied' })
-    return
-  }
+  // Always use the authenticated user's ID from the JWT token.
+  // Admins/Authority can optionally specify a target userId.
+  const isPrivileged = req.user!.role === 'HospitalAdmin' || req.user!.role === 'Authority'
+  const requestedUserId = (req.body as { userId?: string }).userId
+  const userId = (isPrivileged && requestedUserId) ? requestedUserId : req.user!.id
+
   const report = generateComplianceReport(userId)
   res.json(report)
 })
